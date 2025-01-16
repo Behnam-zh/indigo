@@ -128,12 +128,19 @@ func (s *BGS) handleComAtprotoSyncGetBlocks(ctx context.Context, cids []string, 
 	return nil, fmt.Errorf("NYI")
 }
 
+/*
+ * /xrpc/com.atproto.sync.requestCrawl
+ * note03
+ * 解析 PDS URL  ->  构造完整 PDS 主机地址  ->  检查是否为 PDS  ->  调用订阅服务
+ */
 func (s *BGS) handleComAtprotoSyncRequestCrawl(ctx context.Context, body *comatprototypes.SyncRequestCrawl_Input) error {
-	host := body.Hostname
+	host := body.Hostname // 请求体中的 hostname 是 PDS 的域名
+	// 判断 PDS 是否为空，如果为空就返回 HTTP 400 错误
 	if host == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "must pass hostname")
 	}
 
+	// 如果主机名没有以 http:// 或 https:// 开头，则根据配置自动添加协议
 	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
 		if s.ssl {
 			host = "https://" + host
@@ -142,45 +149,57 @@ func (s *BGS) handleComAtprotoSyncRequestCrawl(ctx context.Context, body *comatp
 		}
 	}
 
+	// 解析 PDS 域名，检查是否为有效的 URL
 	u, err := url.Parse(host)
+	// 如果解析失败，则返回 HTTP 400 错误
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "failed to parse hostname")
 	}
 
+	// URL 协议为 http，但服务器要求 https，则返回 HTTP 400 错误
 	if u.Scheme == "http" && s.ssl {
 		return echo.NewHTTPError(http.StatusBadRequest, "this server requires https")
 	}
 
+	// URL 协议为 https，但服务器要求 http，则返回 HTTP 400 错误
 	if u.Scheme == "https" && !s.ssl {
 		return echo.NewHTTPError(http.StatusBadRequest, "this server does not support https")
 	}
 
+	// 如果 URL 的 Path 不为空，则返回 HTTP 400 错误（只能传递主机名）
 	if u.Path != "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "must pass hostname without path")
 	}
 
+	// 如果 URL 中包含查询参数，返回 HTTP 400 错误（只能传递主机名）
 	if u.Query().Encode() != "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "must pass hostname without query")
 	}
 
+	// 获取主机名（hostname / hostname:port）
 	host = u.Host // potentially hostname:port
 
+	// 检查主机名是否被禁止访问
 	banned, err := s.domainIsBanned(ctx, host)
-	if banned {
+	if banned { // 被禁止访问就返回 HTTP 401 错误
 		return echo.NewHTTPError(http.StatusUnauthorized, "domain is banned")
 	}
 
 	log.Warn("TODO: better host validation for crawl requests")
 
+	// 构造一个完整的 PDS 主机地址
 	clientHost := fmt.Sprintf("%s://%s", u.Scheme, host)
 
+	// 创建一个 xrpc Clinet
 	c := &xrpc.Client{
 		Host:   clientHost,
 		Client: http.DefaultClient, // not using the client that auto-retries
 	}
 
+	// 向 PDS 发送描述请求，获取服务器描述信息
 	desc, err := atproto.ServerDescribeServer(ctx, c)
 	if err != nil {
+		// 如果相应失败，返回 HTTP 400 错误
 		errMsg := fmt.Sprintf("requested host (%s) failed to respond to describe request", clientHost)
 		return echo.NewHTTPError(http.StatusBadRequest, errMsg)
 	}
@@ -188,6 +207,7 @@ func (s *BGS) handleComAtprotoSyncRequestCrawl(ctx context.Context, body *comatp
 	// Maybe we could do something with this response later
 	_ = desc
 
+	// 将当前的 Crawl 请求转发给其他 Crawl 服务（分布式/协同爬取）
 	if len(s.nextCrawlers) != 0 {
 		blob, err := json.Marshal(body)
 		if err != nil {
@@ -212,6 +232,7 @@ func (s *BGS) handleComAtprotoSyncRequestCrawl(ctx context.Context, body *comatp
 		}
 	}
 
+	// 订阅指定的 PDS，进行爬取
 	return s.slurper.SubscribeToPds(ctx, host, true, false)
 }
 

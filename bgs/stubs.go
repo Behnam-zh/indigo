@@ -28,7 +28,7 @@ func (s *BGS) RegisterHandlersComAtproto(e *echo.Echo) error {
 	e.GET("/xrpc/com.atproto.sync.getRepo", s.HandleComAtprotoSyncGetRepo)
 	e.GET("/xrpc/com.atproto.sync.listRepos", s.HandleComAtprotoSyncListRepos)
 	e.POST("/xrpc/com.atproto.sync.notifyOfUpdate", s.HandleComAtprotoSyncNotifyOfUpdate)
-	e.POST("/xrpc/com.atproto.sync.requestCrawl", s.HandleComAtprotoSyncRequestCrawl)
+	e.POST("/xrpc/com.atproto.sync.requestCrawl", s.HandleComAtprotoSyncRequestCrawl) // note01
 	return nil
 }
 
@@ -182,19 +182,30 @@ func (s *BGS) HandleComAtprotoSyncNotifyOfUpdate(c echo.Context) error {
 	return nil
 }
 
+/*
+ * note02
+ * 处理 com.atproto.sync.requestCrawl 请求，解析请求体并调用相应的处理函数
+ */
 func (s *BGS) HandleComAtprotoSyncRequestCrawl(c echo.Context) error {
+	// 创建一个 OpenTelemetry span，用于跟踪请求的执行过程
 	ctx, span := otel.Tracer("server").Start(c.Request().Context(), "HandleComAtprotoSyncRequestCrawl")
-	defer span.End()
+	defer span.End() // 确保请求结束时关闭 span
 
+	// 创建一个变量来保存请求体的数据
 	var body comatprototypes.SyncRequestCrawl_Input
+	// 绑定请求体到 body 变量，若解析失败，返回 HTTP 400 错误
 	if err := c.Bind(&body); err != nil {
+		// 返回 JSON 格式的错误信息，包含错误的具体描述
 		return c.JSON(http.StatusBadRequest, XRPCError{Message: fmt.Sprintf("invalid body: %s", err)})
 	}
 	var handleErr error
+	// 调用另一个函数来处理请求，传入上下文和解析后的请求体
 	// func (s *BGS) handleComAtprotoSyncRequestCrawl(ctx context.Context,body *comatprototypes.SyncRequestCrawl_Input) error
 	handleErr = s.handleComAtprotoSyncRequestCrawl(ctx, &body)
+	// 如果处理请求过程中出现错误，直接返回该错误
 	if handleErr != nil {
 		return handleErr
 	}
+	// 如果没有错误，返回 nil 表示成功
 	return nil
 }
